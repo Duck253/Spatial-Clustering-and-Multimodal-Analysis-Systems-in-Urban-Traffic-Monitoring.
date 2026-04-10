@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg15-latest
+    container_name: smart_city_db
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=secretpassword
+      - POSTGRES_DB=traffic_monitoring
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/home/postgres/pgdata/data
+
+volumes:
+  timescaledb_data:

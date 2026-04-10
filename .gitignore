@@ -1,0 +1,28 @@
+# Môi trường & secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Data & logs
+*.log
+*.csv
+*.sqlite3
+data/hanoi_roads.geojson
+
+# Docker volumes (nếu mount local)
+pgdata/
