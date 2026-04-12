@@ -6,7 +6,13 @@ from src.utils.geo_helpers import get_coordinates
 from src.processing.event_analyzer import EventImpactAnalyzer
 
 print("[SYSTEM] Đang tải Model PhoBERT NER...")
-ner_pipeline = pipeline("ner", model="NlpHUST/ner-vietnamese-electra-base", aggregation_strategy="simple")
+ner_pipeline = pipeline(
+    "ner",
+    model="NlpHUST/ner-vietnamese-electra-base",
+    aggregation_strategy="simple",
+)
+
+NER_MAX_CHARS = 400  # ~512 token ≈ 400 ký tự tiếng Việt
 
 
 def load_lexicon_from_db(cursor):
@@ -23,7 +29,7 @@ def load_lexicon_from_db(cursor):
 def extract_entities(text):
     """Bóc tách địa danh bằng cơ chế Hybrid và phân loại sự cố"""
     # 1. Thử dùng AI (PhoBERT)
-    entities = ner_pipeline(text, truncation=True, max_length=512)
+    entities = ner_pipeline(text[:NER_MAX_CHARS])
     locations = [ent['word'] for ent in entities if ent['entity_group'] == 'LOC']
     place_name = ", ".join(locations) if locations else None
 
@@ -96,8 +102,13 @@ def run_nlp_processor():
         active_events = fetch_active_events(cursor)
         event_analyzer = EventImpactAnalyzer(active_events)
 
-        # 2. Lấy các bản tin chưa đọc
-        cursor.execute("SELECT feed_id, raw_content, fetched_at FROM raw_feed WHERE is_processed = false LIMIT 10")
+        # 2. Lấy các bản tin chưa đọc (batch 50 — NLP chạy mỗi 1 phút, đủ theo kịp scraper)
+        cursor.execute("""
+            SELECT feed_id, raw_content, fetched_at FROM raw_feed
+            WHERE is_processed = FALSE
+            ORDER BY fetched_at ASC
+            LIMIT 50
+        """)
         feeds = cursor.fetchall()
 
         for feed_id, content, fetched_at in feeds:

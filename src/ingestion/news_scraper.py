@@ -21,13 +21,9 @@ DEDUP_WINDOW_HOURS = 24   # chỉ so sánh tin trong 24h gần nhất
 
 
 def _ensure_schema(cursor):
-    """Thêm cột content_hash vào raw_feed nếu chưa có"""
-    cursor.execute("""
-        ALTER TABLE raw_feed ADD COLUMN IF NOT EXISTS content_hash VARCHAR(32)
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_raw_feed_hash ON raw_feed(content_hash)
-    """)
+    """Đảm bảo cột content_hash và index tồn tại (idempotent)"""
+    cursor.execute("ALTER TABLE raw_feed ADD COLUMN IF NOT EXISTS content_hash VARCHAR(32)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_raw_feed_hash ON raw_feed(content_hash)")
 
 
 def _load_recent_hashes(cursor) -> set:
@@ -117,8 +113,8 @@ def run_scraper():
 
                 h = content_hash(full_text)
                 cursor.execute(
-                    """INSERT INTO raw_feed (source_id, content_type, raw_content, content_hash, is_processed)
-                       VALUES (%s, 'text', %s, %s, false)""",
+                    """INSERT INTO raw_feed (source_id, content_type, raw_content, content_hash, fetched_at, is_processed)
+                       VALUES (%s, 'text', %s, %s, NOW(), false)""",
                     (source_id, full_text, h)
                 )
 
