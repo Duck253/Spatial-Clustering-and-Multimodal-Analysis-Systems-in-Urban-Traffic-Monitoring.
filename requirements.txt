@@ -58,3 +58,8 @@ sgmllib3k==1.0.0
 markdown-it-py==4.0.0
 mdurl==0.1.2
 annotated_doc==0.0.4
+
+# Dashboard
+streamlit>=1.35.0
+plotly>=5.20.0
+pandas>=2.0.0

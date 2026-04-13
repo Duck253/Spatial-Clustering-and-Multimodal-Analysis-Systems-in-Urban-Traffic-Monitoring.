@@ -43,6 +43,9 @@ GOOGLE_NEWS_QUERIES = [
     # Sự kiện lớn
     "phong tỏa đường hà nội",
     "sự cố giao thông hà nội",
+    # Site-specific — Kinh tế Đô thị & Hà Nội Mới (không có RSS công khai)
+    "giao thông hà nội site:kinhtedothi.vn",
+    "giao thông hà nội site:hanoimoi.vn",
 ]
 
 # ── RSS mở rộng — các chuyên mục sâu hơn từ báo lớn ─────────────────────────
@@ -80,8 +83,9 @@ def _build_google_news_url(query: str) -> str:
 
 def _get_or_create_source(cursor, name: str, url: str) -> int:
     cursor.execute(
-        "INSERT INTO data_source (source_type, source_url) VALUES ('social', %s) ON CONFLICT DO NOTHING",
-        (url,)
+        """INSERT INTO data_source (source_type, source_url, source_name)
+           VALUES ('rss', %s, %s) ON CONFLICT (source_url) DO UPDATE SET source_name = EXCLUDED.source_name""",
+        (url, name)
     )
     cursor.execute("SELECT source_id FROM data_source WHERE source_url = %s", (url,))
     return cursor.fetchone()[0]

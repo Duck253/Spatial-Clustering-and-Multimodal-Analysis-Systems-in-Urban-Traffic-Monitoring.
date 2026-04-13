@@ -9,6 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from src.scripts.init_db import init_db
 from src.ingestion.news_scraper import run_scraper
 from src.ingestion.event_scraper import run_event_scraper
+from src.ingestion.vov_scraper import run_vov_scraper
+from src.ingestion.otofun_scraper import run_otofun_scraper
 from src.processing.nlp_engine import run_nlp_processor
 from src.processing.zone_metrics import compute_zone_metrics
 from src.processing.st_dbscan import run_clustering
@@ -51,6 +53,18 @@ def job_event_scraper():
         run_event_scraper()
     except Exception as e:
         logger.error(f"[JOB] Event scraper lỗi: {e}", exc_info=True)
+
+def job_vov_scraper():
+    try:
+        run_vov_scraper()
+    except Exception as e:
+        logger.error(f"[JOB] VOV scraper lỗi: {e}", exc_info=True)
+
+def job_otofun_scraper():
+    try:
+        run_otofun_scraper()
+    except Exception as e:
+        logger.error(f"[JOB] OtoFun scraper lỗi: {e}", exc_info=True)
 
 def job_cleanup():
     """Xóa raw_feed đã xử lý và cũ hơn 24h để tránh DB phình to."""
@@ -119,12 +133,20 @@ if __name__ == "__main__":
         id='event_job', max_instances=1, misfire_grace_time=300,
     )
     scheduler.add_job(
+        job_vov_scraper, 'interval', minutes=30,
+        id='vov_job', max_instances=1, misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        job_otofun_scraper, 'interval', hours=2,
+        id='otofun_job', max_instances=1, misfire_grace_time=300,
+    )
+    scheduler.add_job(
         job_cleanup, 'interval', hours=1,
         id='cleanup_job', max_instances=1, misfire_grace_time=120,
     )
 
     scheduler.start()
-    logger.info("✅ Lịch trình: Scraper (15p) | NLP (1p) | ST-DBSCAN (10p) | Events (6h) | Cleanup (1h)")
+    logger.info("✅ Lịch trình: Scraper (15p) | VOV (30p) | NLP (1p) | ST-DBSCAN (10p) | OtoFun (2h) | Events (6h) | Cleanup (1h)")
     logger.info(f"   Log file: logs/scheduler.log")
 
     try:

@@ -3,6 +3,7 @@ from transformers import pipeline
 from datetime import datetime
 from src.core.db_manager import get_connection, release_connection
 from src.utils.geo_helpers import get_coordinates
+from src.utils.hanoi_locations import lookup_location
 from src.processing.event_analyzer import EventImpactAnalyzer
 
 print("[SYSTEM] Đang tải Model PhoBERT NER...")
@@ -13,6 +14,17 @@ ner_pipeline = pipeline(
 )
 
 NER_MAX_CHARS = 400  # ~512 token ≈ 400 ký tự tiếng Việt
+
+# Cache geocoding — tránh gọi Nominatim nhiều lần cho cùng địa danh
+_geocode_cache: dict[str, tuple[float, float]] = {}
+
+# Địa danh quá chung chung hoặc ngoài Hà Nội — bỏ qua, không tạo incident
+_GENERIC_LOCATIONS = {
+    "hà nội", "ha noi", "thủ đô", "thành phố hà nội",
+    "tp", "tphcm", "tp.hcm", "hồ chí minh", "thành phố hồ chí minh",
+    "thủ đức", "bình dương", "đồng nai", "lâm đồng", "đà nẵng",
+    "việt nam", "cả nước", "toàn quốc", "thành", "phố",
+}
 
 
 def load_lexicon_from_db(cursor):
@@ -27,27 +39,88 @@ def load_lexicon_from_db(cursor):
 
 
 def extract_entities(text):
-    """Bóc tách địa danh bằng cơ chế Hybrid và phân loại sự cố"""
-    # 1. Thử dùng AI (PhoBERT)
-    entities = ner_pipeline(text[:NER_MAX_CHARS])
-    locations = [ent['word'] for ent in entities if ent['entity_group'] == 'LOC']
-    place_name = ", ".join(locations) if locations else None
+    """
+    Bóc tách địa danh bằng cơ chế 3 tầng:
+      1. Knowledge Base trực tiếp trên toàn văn bản (nhanh, chính xác)
+      2. NER (PhoBERT/Electra)
+      3. Regex fallback
+    """
+    text_lower = text.lower()
 
-    # 2. Cơ chế Fallback: Nếu AI thất bại, dùng Regex
+    # ── Tầng 1: KB lookup trực tiếp trên full text ───────────────────────
+    kb_result = lookup_location(text)
+    kb_name = kb_result[0] if kb_result else None
+    # Loại bỏ nếu KB trả về địa danh quá chung chung
+    if kb_name and kb_name.lower() not in _GENERIC_LOCATIONS:
+        place_name = kb_name
+        print(f"    [KB-DIRECT] Tìm thấy địa danh trong text: '{place_name}'")
+    else:
+        place_name = None
+
+    # ── Tầng 2: NER — chỉ chạy nếu KB không tìm được ────────────────────
     if not place_name:
-        pattern = r"(?:tại|ở|đường|phố|cầu|hầm|ngã tư|ngã ba)\s+([A-ZĐ][\w]+(\s+[A-ZĐ][\w]+)*)"
+        try:
+            entities = ner_pipeline(text[:NER_MAX_CHARS])
+            locations = [
+                ent['word'] for ent in entities
+                if ent['entity_group'] == 'LOC'
+                and ent['word'].lower() not in _GENERIC_LOCATIONS
+                and len(ent['word']) > 3  # loại token ngắn như "TP", "HN"
+            ]
+            if locations:
+                place_name = ", ".join(locations)
+                print(f"    [NER] Tìm thấy: '{place_name}'")
+        except Exception as e:
+            print(f"    [NER] Lỗi: {e}")
+
+    # ── Tầng 3: Regex fallback ────────────────────────────────────────────
+    if not place_name:
+        pattern = r"(?:tại|ở|đường|phố|cầu|hầm|ngã tư|ngã ba|tuyến)\s+([A-ZĐ][\w]+(?:\s+[A-ZĐ][\w]+)*)"
         match = re.search(pattern, text)
         if match:
             place_name = match.group(1)
-            print(f"    [FALLBACK] Đã cứu nguy AI! Tìm thấy địa danh: '{place_name}'")
+            print(f"    [REGEX] Tìm thấy: '{place_name}'")
 
-    # 3. Phân loại sự cố cơ bản
-    text_lower = text.lower()
-    if any(kw in text_lower for kw in ["tai nạn", "va chạm"]): return place_name, "accident"
-    if any(kw in text_lower for kw in ["ngập", "mưa lớn"]): return place_name, "flood"
-    if any(kw in text_lower for kw in ["thi công", "lô cốt"]): return place_name, "construction"
+    # ── Phân loại sự cố ──────────────────────────────────────────────────
+    if any(kw in text_lower for kw in ["tai nạn", "va chạm", "đâm xe", "lật xe"]):
+        incident_type = "accident"
+    elif any(kw in text_lower for kw in ["ngập", "mưa lớn", "lũ"]):
+        incident_type = "flood"
+    elif any(kw in text_lower for kw in ["thi công", "lô cốt", "sửa chữa", "cấm đường"]):
+        incident_type = "construction"
+    else:
+        incident_type = "congestion"
 
-    return place_name, "congestion"  # Mặc định
+    return place_name, incident_type
+
+
+def get_recurring_boost(cursor, place_name: str, detected_at) -> float:
+    """
+    Kiểm tra xem địa điểm này có nằm trong khung giờ tắc định kỳ không.
+    Trả về giá trị boost [0.0, 0.3] để cộng vào potential_score.
+    """
+    hour = detected_at.hour
+    day_type = 'weekend' if detected_at.weekday() >= 5 else 'weekday'
+
+    cursor.execute("""
+        SELECT congestion_prob, note
+        FROM recurring_pattern
+        WHERE is_active = TRUE
+          AND LOWER(location_name) = LOWER(%s)
+          AND day_type IN (%s, 'all')
+          AND hour_start <= %s
+          AND hour_end   >  %s
+        ORDER BY congestion_prob DESC
+        LIMIT 1
+    """, (place_name, day_type, hour, hour))
+
+    row = cursor.fetchone()
+    if row:
+        prob, note = row
+        boost = round(prob * 0.3, 3)   # tối đa +0.3 điểm
+        print(f"    [RECURRING] Khung giờ tắc định kỳ: '{note}' (prob={prob:.2f}, +{boost:.2f})")
+        return boost
+    return 0.0
 
 
 def calculate_potential_score(text, incident_type, base_scores, multipliers):
@@ -102,12 +175,12 @@ def run_nlp_processor():
         active_events = fetch_active_events(cursor)
         event_analyzer = EventImpactAnalyzer(active_events)
 
-        # 2. Lấy các bản tin chưa đọc (batch 50 — NLP chạy mỗi 1 phút, đủ theo kịp scraper)
+        # 2. Lấy các bản tin chưa đọc (batch 200 — tăng từ 50 để bắt kịp backlog)
         cursor.execute("""
             SELECT feed_id, raw_content, fetched_at FROM raw_feed
             WHERE is_processed = FALSE
             ORDER BY fetched_at ASC
-            LIMIT 50
+            LIMIT 200
         """)
         feeds = cursor.fetchall()
 
@@ -122,7 +195,14 @@ def run_nlp_processor():
                 cursor.execute("UPDATE raw_feed SET is_processed = true WHERE feed_id = %s", (feed_id,))
                 continue
 
-            lat, lng = get_coordinates(place_name)
+            # Cache geocoding — dùng lại kết quả cho địa danh đã tra
+            if place_name in _geocode_cache:
+                lat, lng = _geocode_cache[place_name]
+            else:
+                lat, lng = get_coordinates(place_name)
+                if lat and lng:
+                    _geocode_cache[place_name] = (lat, lng)
+
             if not lat or not lng:
                 print(f"❌ Bỏ qua: Không định vị được GPS cho '{place_name}'.")
                 cursor.execute("UPDATE raw_feed SET is_processed = true WHERE feed_id = %s", (feed_id,))
@@ -131,6 +211,12 @@ def run_nlp_processor():
             # --- TÍNH ĐIỂM TIỀM NĂNG TỪ VĂN BẢN ---
             potential_score = calculate_potential_score(content, incident_type, base_scores, multipliers)
             print(f"👉 Điểm văn bản ({incident_type}): {potential_score:.2f}/1.0")
+
+            # --- CỘNG ĐIỂM TẮC ĐỊNH KỲ (recurring pattern) ---
+            recurring_boost = get_recurring_boost(cursor, place_name, fetched_at)
+            if recurring_boost > 0:
+                potential_score = min(1.0, potential_score + recurring_boost)
+                print(f"🔁 RECURRING: +{recurring_boost:.2f} → {potential_score:.2f}")
 
             # --- TÍNH ĐIỂM CỘNG HƯỞNG SỰ KIỆN ---
             impact_score, event_name = event_analyzer.calculate_event_impact(lat, lng, fetched_at)
@@ -149,22 +235,33 @@ def run_nlp_processor():
                         potential_score = min(1.0, potential_score * 1.2)
                         print(f"📍 Khu vực {zone_name} mật độ cao ({pop_density:,.0f} ng/km²) → điểm: {potential_score:.2f}")
 
-            # 3. Lưu vào Database
+            # 3. Lưu vào Database (savepoint để lỗi 1 bài không hỏng cả batch)
+            cursor.execute("SAVEPOINT sp_incident")
             try:
+                # Upsert location — tránh tạo duplicate khi cùng địa danh xuất hiện nhiều lần
                 cursor.execute(
-                    "INSERT INTO location (place_name, latitude, longitude, geom) VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) RETURNING location_id",
+                    """INSERT INTO location (place_name, latitude, longitude, geom)
+                       VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                       ON CONFLICT (place_name) DO UPDATE
+                           SET latitude  = EXCLUDED.latitude,
+                               longitude = EXCLUDED.longitude,
+                               geom      = EXCLUDED.geom
+                       RETURNING location_id""",
                     (place_name, lat, lng, lng, lat)
                 )
                 location_id = cursor.fetchone()[0]
 
                 cursor.execute(
-                    "INSERT INTO incident (feed_id, location_id, incident_type, potential_score, confidence_level, detected_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                    """INSERT INTO incident
+                       (feed_id, location_id, incident_type, potential_score, confidence_level, detected_at)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
                     (feed_id, location_id, incident_type, potential_score, 0.8, fetched_at)
-                    # Nguồn báo chí set độ tin cậy 0.8
                 )
+                cursor.execute("RELEASE SAVEPOINT sp_incident")
                 print("✅ LƯU THÀNH CÔNG VÀO DATABASE!")
             except Exception as db_err:
                 print(f"❌ Lỗi khi lưu DB: {db_err}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_incident")
 
             # Đánh dấu đã đọc
             cursor.execute("UPDATE raw_feed SET is_processed = true WHERE feed_id = %s", (feed_id,))

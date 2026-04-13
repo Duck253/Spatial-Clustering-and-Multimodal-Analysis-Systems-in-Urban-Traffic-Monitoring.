@@ -30,8 +30,8 @@ from src.core.db_manager import get_connection, release_connection
 # ── Tham số mặc định ────────────────────────────────────────────────
 DEFAULT_EPS1_METERS = 500
 DEFAULT_EPS2_HOURS  = 2.0
-DEFAULT_MIN_PTS     = 3
-LOOK_BACK_HOURS     = 24   # chỉ gom cụm sự cố trong 24h gần nhất
+DEFAULT_MIN_PTS     = 2    # hạ từ 3→2 để tạo cluster trong giai đoạn data còn ít
+LOOK_BACK_HOURS     = 48   # mở rộng 24→48h để gom được nhiều điểm hơn
 
 UNVISITED = -2
 NOISE     = -1
@@ -139,13 +139,14 @@ def run_clustering(eps1=DEFAULT_EPS1_METERS, eps2=DEFAULT_EPS2_HOURS, min_pts=DE
 
         # ── 1. Đọc sự cố gần đây ────────────────────────────────────
         cutoff = datetime.now() - timedelta(hours=LOOK_BACK_HOURS)
+        # Bounding box Hà Nội: lat 20.56–21.38, lng 105.28–106.02
         cursor.execute("""
             SELECT i.incident_id, l.latitude, l.longitude, i.detected_at, i.potential_score
             FROM incident i
             JOIN location l ON i.location_id = l.location_id
             WHERE i.detected_at >= %s
-              AND l.latitude IS NOT NULL
-              AND l.longitude IS NOT NULL
+              AND l.latitude  BETWEEN 20.56 AND 21.38
+              AND l.longitude BETWEEN 105.28 AND 106.02
             ORDER BY i.detected_at
         """, (cutoff,))
         rows = cursor.fetchall()
@@ -178,7 +179,7 @@ def run_clustering(eps1=DEFAULT_EPS1_METERS, eps2=DEFAULT_EPS2_HOURS, min_pts=DE
 
         # ── 4. Xóa kết quả cũ và lưu cụm mới vào DB ─────────────────
         cursor.execute("UPDATE incident SET cluster_id = NULL WHERE detected_at >= %s", (cutoff,))
-        cursor.execute("DELETE FROM incident_cluster WHERE detected_at >= %s", (cutoff,))
+        cursor.execute("DELETE FROM incident_cluster WHERE created_at >= %s", (cutoff,))
 
         for label, members in sorted(clusters.items()):
             center_lat  = sum(m['lat']   for m in members) / len(members)

@@ -110,7 +110,8 @@ DDL_STATEMENTS = [
         place_name  TEXT   NOT NULL,
         latitude    FLOAT8,
         longitude   FLOAT8,
-        geom        GEOMETRY(POINT, 4326)
+        geom        GEOMETRY(POINT, 4326),
+        CONSTRAINT uq_location_place_name UNIQUE (place_name)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_location_geom ON location USING GIST(geom)",
@@ -156,6 +157,24 @@ DDL_STATEMENTS = [
     )
     """,
 
+    # 8b. recurring_pattern — điểm tắc định kỳ theo giờ/ngày
+    """
+    CREATE TABLE IF NOT EXISTS recurring_pattern (
+        pattern_id      SERIAL PRIMARY KEY,
+        location_name   VARCHAR(200) NOT NULL,
+        latitude        FLOAT8,
+        longitude       FLOAT8,
+        day_type        VARCHAR(10)  NOT NULL CHECK (day_type IN ('weekday','weekend','all')),
+        hour_start      SMALLINT     NOT NULL CHECK (hour_start BETWEEN 0 AND 23),
+        hour_end        SMALLINT     NOT NULL CHECK (hour_end   BETWEEN 0 AND 23),
+        congestion_prob FLOAT4       NOT NULL CHECK (congestion_prob BETWEEN 0 AND 1),
+        note            TEXT,
+        is_active       BOOLEAN DEFAULT TRUE,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_pattern_active ON recurring_pattern(is_active, day_type, hour_start, hour_end)",
+
     # 9. incident_cluster
     """
     CREATE TABLE IF NOT EXISTS incident_cluster (
@@ -188,6 +207,38 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_incident_detected    ON incident(detected_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_incident_cluster     ON incident(cluster_id)",
     "CREATE INDEX IF NOT EXISTS idx_incident_location    ON incident(location_id)",
+
+    # 11. traffic_features — feature vector cho ML model T+1/2/3h
+    """
+    CREATE TABLE IF NOT EXISTS traffic_features (
+        feature_id             SERIAL PRIMARY KEY,
+        location_id            INT REFERENCES location(location_id),
+        zone_name              VARCHAR(100),
+        snapshot_time          TIMESTAMPTZ NOT NULL,
+        hour_of_day            SMALLINT NOT NULL,
+        day_of_week            SMALLINT NOT NULL,
+        is_peak_hour           BOOLEAN  NOT NULL DEFAULT FALSE,
+        is_weekend             BOOLEAN  NOT NULL DEFAULT FALSE,
+        incident_count_2h      INT     DEFAULT 0,
+        incident_count_6h      INT     DEFAULT 0,
+        has_accident_nearby    BOOLEAN DEFAULT FALSE,
+        avg_score_2h           FLOAT4  DEFAULT 0.0,
+        active_cluster_nearby  BOOLEAN DEFAULT FALSE,
+        cluster_intensity      FLOAT4  DEFAULT 0.0,
+        event_within_3h        BOOLEAN DEFAULT FALSE,
+        event_attendance_nearby INT    DEFAULT 0,
+        zone_road_density      FLOAT4  DEFAULT 0.0,
+        zone_pressure_score    FLOAT4  DEFAULT 0.0,
+        zone_historical_risk   FLOAT4  DEFAULT 0.0,
+        recurring_prob         FLOAT4  DEFAULT 0.0,
+        target_t1h             SMALLINT,
+        target_t2h             SMALLINT,
+        target_t3h             SMALLINT,
+        created_at             TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_features_snapshot ON traffic_features(snapshot_time DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_features_location ON traffic_features(location_id, snapshot_time DESC)",
 ]
 
 

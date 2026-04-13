@@ -59,8 +59,9 @@ def is_duplicate(new_content: str, recent_hashes: set, recent_contents: list) ->
 
 def _get_or_create_source(cursor, source: dict) -> int:
     cursor.execute(
-        "INSERT INTO data_source (source_type, source_url) VALUES ('social', %s) ON CONFLICT DO NOTHING",
-        (source['url'],)
+        """INSERT INTO data_source (source_type, source_url, source_name)
+           VALUES ('rss', %s, %s) ON CONFLICT (source_url) DO UPDATE SET source_name = EXCLUDED.source_name""",
+        (source['url'], source['name'])
     )
     cursor.execute("SELECT source_id FROM data_source WHERE source_url = %s", (source['url'],))
     return cursor.fetchone()[0]
