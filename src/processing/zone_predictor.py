@@ -17,8 +17,10 @@ Ngưỡng:
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.core.db_manager import get_connection, release_connection
+
+VN_TZ = timezone(timedelta(hours=7))
 
 
 def predict_congestion(zone_name: str, hours_ahead: int = 1):
@@ -28,7 +30,7 @@ def predict_congestion(zone_name: str, hours_ahead: int = 1):
         return
 
     cursor = conn.cursor()
-    now = datetime.now()
+    now = datetime.now(VN_TZ)
     future = now + timedelta(hours=hours_ahead)
 
     print(f"\n{'='*60}")

@@ -18,7 +18,7 @@ import sys
 import re
 import time
 import feedparser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -94,6 +94,7 @@ EVENT_QUERIES = [
 ]
 
 _GN_BASE = "https://news.google.com/rss/search?hl=vi&gl=VN&ceid=VN:vi&q="
+VN_TZ = timezone(timedelta(hours=7))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -120,8 +121,9 @@ def _extract_event_time(text: str, pub_date=None) -> tuple[datetime, datetime]:
     """
     Cố gắng trích xuất ngày/giờ từ văn bản.
     Fallback: ngày mai 19h–22h nếu không tìm được.
+    Trả về timezone-aware datetime (UTC+7) để lưu đúng vào TIMESTAMPTZ.
     """
-    now = datetime.now()
+    now = datetime.now(VN_TZ)
     text_lower = text.lower()
 
     # Tìm giờ: "19h", "19:00", "20 giờ"
@@ -134,19 +136,16 @@ def _extract_event_time(text: str, pub_date=None) -> tuple[datetime, datetime]:
         day, month = int(date_match.group(1)), int(date_match.group(2))
         year = now.year if month >= now.month else now.year + 1
         try:
-            start = datetime(year, month, day, hour, 0)
+            start = datetime(year, month, day, hour, 0, tzinfo=VN_TZ)
         except ValueError:
-            start = now + timedelta(days=1)
-            start = start.replace(hour=hour, minute=0, second=0, microsecond=0)
+            start = (now + timedelta(days=1)).replace(hour=hour, minute=0, second=0, microsecond=0)
     elif pub_date:
         # Dùng ngày đăng bài + 1 ngày
-        start = pub_date + timedelta(days=1)
-        start = start.replace(hour=hour, minute=0, second=0, microsecond=0)
+        base = pub_date.astimezone(VN_TZ) if pub_date.tzinfo else pub_date.replace(tzinfo=VN_TZ)
+        start = (base + timedelta(days=1)).replace(hour=hour, minute=0, second=0, microsecond=0)
     else:
-        start = now + timedelta(days=1)
-        start = start.replace(hour=hour, minute=0, second=0, microsecond=0)
+        start = (now + timedelta(days=1)).replace(hour=hour, minute=0, second=0, microsecond=0)
 
-    # Nếu start đã qua rồi, bỏ qua (sự kiện cũ)
     end = start + timedelta(hours=3)
     return start, end
 
@@ -213,7 +212,7 @@ def run_event_scraper():
                 start, end = _extract_event_time(text, pub_date)
 
                 # Bỏ qua sự kiện đã qua
-                if end < datetime.now():
+                if end < datetime.now(VN_TZ):
                     total_skipped += 1
                     continue
 

@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from geopy.distance import geodesic
+
+VN_TZ = timezone(timedelta(hours=7))
 
 
 class EventImpactAnalyzer:
@@ -54,7 +56,7 @@ class EventImpactAnalyzer:
 # --- CHẠY THỬ NGHIỆM MÔ PHỎNG ---
 if __name__ == "__main__":
     # 1. Load giả lập sự kiện từ DB (Ở đây mình hardcode array để test nhanh logic)
-    now = datetime.now()
+    now = datetime.now(VN_TZ)
     mock_db_events = [
         {
             "title": "Trận Bóng đá (Mỹ Đình)", "lat": 21.0202, "lng": 105.7645,

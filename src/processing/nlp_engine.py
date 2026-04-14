@@ -1,7 +1,9 @@
 import re
 from transformers import pipeline
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from src.core.db_manager import get_connection, release_connection
+
+VN_TZ = timezone(timedelta(hours=7))  # UTC+7
 from src.utils.geo_helpers import get_coordinates
 from src.utils.hanoi_locations import lookup_location
 from src.processing.event_analyzer import EventImpactAnalyzer
@@ -46,18 +48,24 @@ def extract_entities(text):
     """
     Bóc tách địa danh bằng cơ chế 3 tầng:
       1. Knowledge Base trực tiếp trên toàn văn bản (nhanh, chính xác)
-      2. NER (PhoBERT/Electra)
+      2. NER (PhoBERT/Electra) — lấy entity LOC có score cao nhất
       3. Regex fallback
+
+    Trả về: (place_name, incident_type, confidence_level)
+      KB    → confidence 0.90
+      NER   → confidence 0.75
+      Regex → confidence 0.50
     """
     text_lower = text.lower()
+    confidence_level = 0.5  # mặc định thấp nhất
 
     # ── Tầng 1: KB lookup trực tiếp trên full text ───────────────────────
     kb_result = lookup_location(text)
     kb_name = kb_result[0] if kb_result else None
-    # Loại bỏ nếu KB trả về địa danh quá chung chung
     if kb_name and kb_name.lower() not in _GENERIC_LOCATIONS:
         place_name = kb_name
-        print(f"    [KB-DIRECT] Tìm thấy địa danh trong text: '{place_name}'")
+        confidence_level = 0.90
+        print(f"    [KB-DIRECT] '{place_name}' (conf=0.90)")
     else:
         place_name = None
 
@@ -65,15 +73,18 @@ def extract_entities(text):
     if not place_name:
         try:
             entities = ner_pipeline(text[:NER_MAX_CHARS])
-            locations = [
-                ent['word'] for ent in entities
+            loc_entities = [
+                ent for ent in entities
                 if ent['entity_group'] == 'LOC'
                 and ent['word'].lower() not in _GENERIC_LOCATIONS
-                and len(ent['word']) > 3  # loại token ngắn như "TP", "HN"
+                and len(ent['word']) > 3
             ]
-            if locations:
-                place_name = ", ".join(locations)
-                print(f"    [NER] Tìm thấy: '{place_name}'")
+            if loc_entities:
+                # Lấy entity có score cao nhất thay vì join tất cả
+                best = max(loc_entities, key=lambda e: e['score'])
+                place_name = best['word']
+                confidence_level = round(float(best['score']) * 0.75, 3)
+                print(f"    [NER] '{place_name}' (score={best['score']:.2f}, conf={confidence_level:.2f})")
         except Exception as e:
             print(f"    [NER] Lỗi: {e}")
 
@@ -83,7 +94,8 @@ def extract_entities(text):
         match = re.search(pattern, text)
         if match:
             place_name = match.group(1)
-            print(f"    [REGEX] Tìm thấy: '{place_name}'")
+            confidence_level = 0.50
+            print(f"    [REGEX] '{place_name}' (conf=0.50)")
 
     # ── Phân loại sự cố ──────────────────────────────────────────────────
     if any(kw in text_lower for kw in ["tai nạn", "va chạm", "đâm xe", "lật xe"]):
@@ -95,28 +107,35 @@ def extract_entities(text):
     else:
         incident_type = "congestion"
 
-    return place_name, incident_type
+    return place_name, incident_type, confidence_level
 
 
 def get_recurring_boost(cursor, place_name: str, detected_at) -> float:
     """
     Kiểm tra xem địa điểm này có nằm trong khung giờ tắc định kỳ không.
     Trả về giá trị boost [0.0, 0.3] để cộng vào potential_score.
+    Dùng giờ địa phương VN (UTC+7) và bidirectional LIKE để khớp tên.
     """
-    hour = detected_at.hour
-    day_type = 'weekend' if detected_at.weekday() >= 5 else 'weekday'
+    dt_vn    = detected_at.astimezone(VN_TZ) if detected_at.tzinfo else detected_at
+    hour     = dt_vn.hour
+    day_type = 'weekend' if dt_vn.weekday() >= 5 else 'weekday'
 
     cursor.execute("""
         SELECT congestion_prob, note
         FROM recurring_pattern
         WHERE is_active = TRUE
-          AND LOWER(location_name) = LOWER(%s)
           AND day_type IN (%s, 'all')
           AND hour_start <= %s
           AND hour_end   >  %s
+          AND LENGTH(%s) >= 5
+          AND (
+              LOWER(location_name) = LOWER(%s)
+              OR LOWER(location_name::text) LIKE CONCAT('%%', LOWER(%s), '%%')
+              OR LOWER(%s::text)            LIKE CONCAT('%%', LOWER(location_name), '%%')
+          )
         ORDER BY congestion_prob DESC
         LIMIT 1
-    """, (place_name, day_type, hour, hour))
+    """, (day_type, hour, hour, place_name, place_name, place_name, place_name))
 
     row = cursor.fetchone()
     if row:
@@ -192,7 +211,7 @@ def run_nlp_processor():
             print(f"\n--- 🔍 ĐANG XỬ LÝ TIN ID: {feed_id} ---")
             print(f"Nội dung: '{content}'")
 
-            place_name, incident_type = extract_entities(content)
+            place_name, incident_type, confidence_level = extract_entities(content)
 
             if not place_name:
                 print("❌ Bỏ qua: Không bóc tách được địa danh.")
@@ -265,7 +284,7 @@ def run_nlp_processor():
                     """INSERT INTO incident
                        (feed_id, location_id, incident_type, potential_score, confidence_level, detected_at)
                        VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (feed_id, location_id, incident_type, potential_score, 0.8, fetched_at)
+                    (feed_id, location_id, incident_type, potential_score, confidence_level, fetched_at)
                 )
                 cursor.execute("RELEASE SAVEPOINT sp_incident")
                 print("✅ LƯU THÀNH CÔNG VÀO DATABASE!")

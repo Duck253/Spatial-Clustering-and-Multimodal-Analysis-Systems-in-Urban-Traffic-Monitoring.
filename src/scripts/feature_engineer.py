@@ -21,8 +21,10 @@ Hoặc tích hợp vào scheduler (chạy mỗi 30 phút):
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from src.core.db_manager import get_connection, release_connection
+
+VN_TZ = timezone(timedelta(hours=7))  # UTC+7
 
 # ── Tham số ──────────────────────────────────────────────────────────────────
 NEARBY_METERS      = 500    # Bán kính "lân cận" cho incident/cluster
@@ -43,27 +45,38 @@ def _is_peak(hour: int, is_weekend: bool) -> bool:
 
 def _compute_incident_features(cur, location_id: int, snap_time: datetime) -> dict:
     """Đếm incidents trong 2h và 6h trước snapshot, trong bán kính NEARBY_METERS."""
+    # Query cửa sổ 2h: count, avg_score, has_accident
     cur.execute("""
         SELECT
-            COUNT(*)                                        AS count_2h,
-            COALESCE(AVG(i.potential_score), 0.0)          AS avg_score_2h,
-            BOOL_OR(i.incident_type = 'accident')          AS has_accident_2h,
-            COUNT(*) FILTER (
-                WHERE i.detected_at >= %s - INTERVAL '6 hours'
-            )                                               AS count_6h
+            COUNT(*)                               AS count_2h,
+            COALESCE(AVG(i.potential_score), 0.0)  AS avg_score_2h,
+            BOOL_OR(i.incident_type = 'accident')  AS has_accident_2h
         FROM incident i
         JOIN location l ON i.location_id = l.location_id
         JOIN location src ON src.location_id = %s
         WHERE i.detected_at >= %s - INTERVAL '2 hours'
           AND i.detected_at <  %s
           AND ST_DWithin(l.geom::geography, src.geom::geography, %s)
-    """, (snap_time, location_id, snap_time, snap_time, NEARBY_METERS))
-    row = cur.fetchone()
+    """, (location_id, snap_time, snap_time, NEARBY_METERS))
+    row2 = cur.fetchone()
+
+    # Query riêng cửa sổ 6h — outer WHERE khác nên phải tách query
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM incident i
+        JOIN location l ON i.location_id = l.location_id
+        JOIN location src ON src.location_id = %s
+        WHERE i.detected_at >= %s - INTERVAL '6 hours'
+          AND i.detected_at <  %s
+          AND ST_DWithin(l.geom::geography, src.geom::geography, %s)
+    """, (location_id, snap_time, snap_time, NEARBY_METERS))
+    row6 = cur.fetchone()
+
     return {
-        "incident_count_2h":   int(row[0]),
-        "avg_score_2h":        float(row[1]),
-        "has_accident_nearby": bool(row[2]),
-        "incident_count_6h":   int(row[3]),
+        "incident_count_2h":   int(row2[0]),
+        "avg_score_2h":        float(row2[1]),
+        "has_accident_nearby": bool(row2[2]),
+        "incident_count_6h":   int(row6[0]),
     }
 
 
@@ -169,9 +182,14 @@ def _compute_weather_features(cur, snap_time: datetime) -> dict:
 
 
 def _compute_recurring_prob(cur, location_id: int, snap_time: datetime) -> float:
-    """Tra cứu xác suất tắc định kỳ theo giờ và ngày."""
-    hour     = snap_time.hour
-    day_type = 'weekend' if snap_time.weekday() >= 5 else 'weekday'
+    """
+    Tra cứu xác suất tắc định kỳ theo giờ và ngày.
+    Dùng bidirectional LIKE để khớp tên không hoàn toàn giống nhau:
+      "Láng" ↔ "Đường Láng", "Võ Chí Công" ↔ "Nút giao Võ Chí Công - Xuân La"
+    """
+    snap_vn  = snap_time.astimezone(VN_TZ) if snap_time.tzinfo else snap_time
+    hour     = snap_vn.hour
+    day_type = 'weekend' if snap_vn.weekday() >= 5 else 'weekday'
 
     cur.execute("""
         SELECT MAX(rp.congestion_prob)
@@ -181,7 +199,12 @@ def _compute_recurring_prob(cur, location_id: int, snap_time: datetime) -> float
           AND rp.day_type IN (%s, 'all')
           AND rp.hour_start <= %s
           AND rp.hour_end   >  %s
-          AND LOWER(rp.location_name) = LOWER(src.place_name)
+          AND LENGTH(src.place_name) >= 5
+          AND (
+              LOWER(rp.location_name) = LOWER(src.place_name)
+              OR LOWER(rp.location_name::text) LIKE CONCAT('%%', LOWER(src.place_name), '%%')
+              OR LOWER(src.place_name::text)   LIKE CONCAT('%%', LOWER(rp.location_name), '%%')
+          )
     """, (location_id, day_type, hour, hour))
     row = cur.fetchone()
     return float(row[0]) if row and row[0] else 0.0
@@ -200,8 +223,8 @@ def _compute_targets(cur, location_id: int, snap_time: datetime) -> dict:
         ("target_t3h", 2, 3),
     ]
     for col, h_start, h_end in windows:
-        t_start = snap_time + __import__('datetime').timedelta(hours=h_start)
-        t_end   = snap_time + __import__('datetime').timedelta(hours=h_end)
+        t_start = snap_time + timedelta(hours=h_start)
+        t_end   = snap_time + timedelta(hours=h_end)
 
         # Nếu khoảng thời gian chưa xảy ra → nhãn NULL
         if t_end > now:
@@ -260,8 +283,10 @@ def run_feature_engineer():
                 if snap_time.tzinfo is None:
                     snap_time = snap_time.replace(tzinfo=timezone.utc)
 
-                hour       = snap_time.hour
-                dow        = snap_time.weekday()  # 0=T2, 6=CN
+                # Dùng giờ địa phương Việt Nam (UTC+7) cho tất cả tính toán
+                snap_vn    = snap_time.astimezone(VN_TZ)
+                hour       = snap_vn.hour
+                dow        = snap_vn.weekday()  # 0=T2, 6=CN
                 is_weekend = dow >= 5
                 is_peak    = _is_peak(hour, is_weekend)
 
@@ -298,9 +323,14 @@ def run_feature_engineer():
                         %s, %s, %s
                     )
                     ON CONFLICT (location_id, snapshot_time) DO UPDATE SET
-                        rainfall_mm    = EXCLUDED.rainfall_mm,
-                        is_raining     = EXCLUDED.is_raining,
-                        wind_speed_kmh = EXCLUDED.wind_speed_kmh
+                        hour_of_day            = EXCLUDED.hour_of_day,
+                        day_of_week            = EXCLUDED.day_of_week,
+                        is_peak_hour           = EXCLUDED.is_peak_hour,
+                        is_weekend             = EXCLUDED.is_weekend,
+                        recurring_prob         = EXCLUDED.recurring_prob,
+                        rainfall_mm            = EXCLUDED.rainfall_mm,
+                        is_raining             = EXCLUDED.is_raining,
+                        wind_speed_kmh         = EXCLUDED.wind_speed_kmh
                 """, (
                     location_id,
                     zone_feat["zone_name"],
