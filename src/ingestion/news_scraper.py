@@ -5,15 +5,15 @@ from src.utils.text_helpers import content_hash, get_jaccard_sim, has_traffic_fe
 
 RSS_SOURCES = [
     # ── Báo lớn toàn quốc ──────────────────────────────────────────
-    {"name": "VnExpress",   "url": "https://vnexpress.net/rss/thoi-su.rss"},
-    {"name": "Tuổi Trẻ",    "url": "https://tuoitre.vn/rss/chinh-tri-xa-hoi/giao-thong.rss"},
-    {"name": "Thanh Niên",  "url": "https://thanhnien.vn/rss/thoi-su/giao-thong.rss"},
-    {"name": "Dân Trí",     "url": "https://dantri.com.vn/xa-hoi.rss"},
-    {"name": "Zing News",   "url": "https://zingnews.vn/giao-thong.rss"},
-    {"name": "Tiền Phong",  "url": "https://tienphong.vn/rss/xa-hoi.rss"},
-    # ── Báo Hà Nội ─────────────────────────────────────────────────
-    {"name": "Hà Nội Mới",  "url": "https://hanoimoi.vn/rss/Giao-thong/43.rss"},
-    {"name": "Kênh14",      "url": "https://kenh14.vn/xa-hoi.rss"},
+    {"name": "VnExpress",      "url": "https://vnexpress.net/rss/thoi-su.rss"},
+    {"name": "VnExpress GT",   "url": "https://vnexpress.net/rss/giao-thong.rss"},
+    {"name": "Tuổi Trẻ",       "url": "https://tuoitre.vn/rss/giao-thong.rss"},
+    {"name": "Tiền Phong",     "url": "https://tienphong.vn/rss/xa-hoi.rss"},
+    {"name": "Kênh14",         "url": "https://kenh14.vn/xa-hoi.rss"},
+    # ── Google News RSS — tổng hợp đa nguồn theo từ khóa ──────────
+    {"name": "GG-KẹtXeHN",    "url": "https://news.google.com/rss/search?q=k%E1%BA%B9t+xe+H%C3%A0+N%E1%BB%99i&hl=vi&gl=VN&ceid=VN:vi"},
+    {"name": "GG-TaiNanHN",   "url": "https://news.google.com/rss/search?q=tai+n%E1%BA%A1n+giao+th%C3%B4ng+H%C3%A0+N%E1%BB%99i&hl=vi&gl=VN&ceid=VN:vi"},
+    {"name": "GG-NgapHN",     "url": "https://news.google.com/rss/search?q=ng%E1%BA%ADp+%C4%91%C6%B0%E1%BB%9Dng+H%C3%A0+N%E1%BB%99i&hl=vi&gl=VN&ceid=VN:vi"},
 ]
 
 JACCARD_THRESHOLD = 0.6   # ngưỡng gọi là "trùng gần đúng"

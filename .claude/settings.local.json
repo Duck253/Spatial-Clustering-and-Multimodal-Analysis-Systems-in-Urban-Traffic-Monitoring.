@@ -20,7 +20,8 @@
       "Bash(python -c ':*)",
       "Bash(PYTHONPATH=. python src/scripts/feature_engineer.py)",
       "Bash(PYTHONPATH=. python src/scripts/init_db.py)",
-      "Bash(PYTHONPATH=. python src/ingestion/weather_fetcher.py backfill 30)"
+      "Bash(PYTHONPATH=. python src/ingestion/weather_fetcher.py backfill 30)",
+      "Bash(python:*)"
     ]
   }
 }
