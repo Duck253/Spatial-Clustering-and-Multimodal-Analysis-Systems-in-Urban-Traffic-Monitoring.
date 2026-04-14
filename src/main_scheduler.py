@@ -75,7 +75,8 @@ def job_cleanup():
     try:
         cursor.execute("""
             DELETE FROM raw_feed
-            WHERE fetched_at < NOW() - INTERVAL '24 hours'
+            WHERE is_processed = TRUE
+              AND fetched_at < NOW() - INTERVAL '24 hours'
         """)
         deleted = cursor.rowcount
         conn.commit()
