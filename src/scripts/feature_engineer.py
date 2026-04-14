@@ -29,6 +29,7 @@ NEARBY_METERS      = 500    # Bán kính "lân cận" cho incident/cluster
 EVENT_RADIUS_M     = 2000   # Bán kính ảnh hưởng sự kiện
 PEAK_HOURS_AM      = (7, 9)     # Giờ cao điểm sáng [7, 9)
 PEAK_HOURS_PM      = (17, 19)   # Giờ cao điểm chiều [17, 19)
+RAIN_THRESHOLD_MM  = 0.1    # Ngưỡng coi là đang mưa
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -146,6 +147,27 @@ def _compute_zone_features(cur, location_id: int) -> dict:
     }
 
 
+def _compute_weather_features(cur, snap_time: datetime) -> dict:
+    """Lấy dữ liệu thời tiết gần nhất với snapshot_time từ weather_snapshot."""
+    cur.execute("""
+        SELECT rainfall_mm, is_raining, wind_speed_kmh, weather_code
+        FROM weather_snapshot
+        WHERE snapshot_hour <= %s
+        ORDER BY snapshot_hour DESC
+        LIMIT 1
+    """, (snap_time,))
+    row = cur.fetchone()
+    if not row:
+        return {"rainfall_mm": 0.0, "is_raining": False,
+                "wind_speed_kmh": 0.0, "weather_code": 0}
+    return {
+        "rainfall_mm":    float(row[0]),
+        "is_raining":     bool(row[1]),
+        "wind_speed_kmh": float(row[2]),
+        "weather_code":   int(row[3]),
+    }
+
+
 def _compute_recurring_prob(cur, location_id: int, snap_time: datetime) -> float:
     """Tra cứu xác suất tắc định kỳ theo giờ và ngày."""
     hour     = snap_time.hour
@@ -248,6 +270,7 @@ def run_feature_engineer():
                 evt_feat  = _compute_event_features(cur, location_id, snap_time)
                 zone_feat = _compute_zone_features(cur, location_id)
                 rec_prob  = _compute_recurring_prob(cur, location_id, snap_time)
+                wthr_feat = _compute_weather_features(cur, snap_time)
                 targets   = _compute_targets(cur, location_id, snap_time)
 
                 cur.execute("""
@@ -260,6 +283,7 @@ def run_feature_engineer():
                         event_within_3h, event_attendance_nearby,
                         zone_road_density, zone_pressure_score, zone_historical_risk,
                         recurring_prob,
+                        rainfall_mm, is_raining, wind_speed_kmh,
                         target_t1h, target_t2h, target_t3h
                     ) VALUES (
                         %s, %s, %s,
@@ -270,9 +294,13 @@ def run_feature_engineer():
                         %s, %s,
                         %s, %s, %s,
                         %s,
+                        %s, %s, %s,
                         %s, %s, %s
                     )
-                    ON CONFLICT (location_id, snapshot_time) DO NOTHING
+                    ON CONFLICT (location_id, snapshot_time) DO UPDATE SET
+                        rainfall_mm    = EXCLUDED.rainfall_mm,
+                        is_raining     = EXCLUDED.is_raining,
+                        wind_speed_kmh = EXCLUDED.wind_speed_kmh
                 """, (
                     location_id,
                     zone_feat["zone_name"],
@@ -290,6 +318,9 @@ def run_feature_engineer():
                     zone_feat["zone_pressure_score"],
                     zone_feat["zone_historical_risk"],
                     rec_prob,
+                    wthr_feat["rainfall_mm"],
+                    wthr_feat["is_raining"],
+                    wthr_feat["wind_speed_kmh"],
                     targets["target_t1h"],
                     targets["target_t2h"],
                     targets["target_t3h"],

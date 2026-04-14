@@ -232,6 +232,9 @@ DDL_STATEMENTS = [
         zone_pressure_score    FLOAT4  DEFAULT 0.0,
         zone_historical_risk   FLOAT4  DEFAULT 0.0,
         recurring_prob         FLOAT4  DEFAULT 0.0,
+        rainfall_mm            FLOAT4  DEFAULT 0.0,
+        is_raining             BOOLEAN DEFAULT FALSE,
+        wind_speed_kmh         FLOAT4  DEFAULT 0.0,
         target_t1h             SMALLINT,
         target_t2h             SMALLINT,
         target_t3h             SMALLINT,
@@ -240,6 +243,20 @@ DDL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_features_snapshot ON traffic_features(snapshot_time DESC)",
     "CREATE INDEX IF NOT EXISTS idx_features_location ON traffic_features(location_id, snapshot_time DESC)",
+
+    # 12. weather_snapshot — dữ liệu thời tiết Hà Nội theo giờ (Open-Meteo)
+    """
+    CREATE TABLE IF NOT EXISTS weather_snapshot (
+        weather_id      SERIAL PRIMARY KEY,
+        snapshot_hour   TIMESTAMPTZ NOT NULL UNIQUE,
+        rainfall_mm     FLOAT4  NOT NULL DEFAULT 0.0,
+        is_raining      BOOLEAN NOT NULL DEFAULT FALSE,
+        wind_speed_kmh  FLOAT4  NOT NULL DEFAULT 0.0,
+        weather_code    SMALLINT NOT NULL DEFAULT 0,
+        fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_weather_hour ON weather_snapshot(snapshot_hour DESC)",
 ]
 
 
@@ -271,6 +288,20 @@ def init_db():
                 END IF;
             END$$;
         """)
+        conn.commit()
+
+        # Migration: thêm cột weather vào traffic_features nếu chưa có
+        for col, col_type in [
+            ("rainfall_mm",   "FLOAT4 DEFAULT 0.0"),
+            ("is_raining",    "BOOLEAN DEFAULT FALSE"),
+            ("wind_speed_kmh","FLOAT4 DEFAULT 0.0"),
+        ]:
+            cursor.execute(f"""
+                DO $$ BEGIN
+                    ALTER TABLE traffic_features ADD COLUMN IF NOT EXISTS {col} {col_type};
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """)
         conn.commit()
 
         # Tạo các bảng và index
