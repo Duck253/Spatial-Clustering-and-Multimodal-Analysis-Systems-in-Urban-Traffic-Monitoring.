@@ -179,7 +179,7 @@ def run_clustering(eps1=DEFAULT_EPS1_METERS, eps2=DEFAULT_EPS2_HOURS, min_pts=DE
 
         # ── 4. Xóa kết quả cũ và lưu cụm mới vào DB ─────────────────
         cursor.execute("UPDATE incident SET cluster_id = NULL WHERE detected_at >= %s", (cutoff,))
-        cursor.execute("DELETE FROM incident_cluster WHERE created_at >= %s", (cutoff,))
+        cursor.execute("DELETE FROM incident_cluster WHERE detected_at >= %s", (cutoff,))
 
         for label, members in sorted(clusters.items()):
             center_lat  = sum(m['lat']   for m in members) / len(members)

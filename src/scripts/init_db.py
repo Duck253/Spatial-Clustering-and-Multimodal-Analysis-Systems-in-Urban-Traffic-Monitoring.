@@ -67,7 +67,8 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS data_source (
         source_id   SERIAL PRIMARY KEY,
         source_type VARCHAR(50)  NOT NULL,
-        source_url  TEXT         NOT NULL UNIQUE
+        source_url  TEXT         NOT NULL UNIQUE,
+        source_name VARCHAR(100)
     )
     """,
 
@@ -252,6 +253,24 @@ def init_db():
     try:
         # Đảm bảo extension PostGIS tồn tại
         cursor.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+        conn.commit()
+
+        # Migration: đổi tên cột created_at → detected_at trong incident_cluster (schema cũ)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'incident_cluster' AND column_name = 'created_at'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'incident_cluster' AND column_name = 'detected_at'
+                ) THEN
+                    ALTER TABLE incident_cluster RENAME COLUMN created_at TO detected_at;
+                    RAISE NOTICE 'Migration: đã đổi tên created_at → detected_at trong incident_cluster';
+                END IF;
+            END$$;
+        """)
         conn.commit()
 
         # Tạo các bảng và index
