@@ -15,6 +15,10 @@ ner_pipeline = pipeline(
 
 NER_MAX_CHARS = 400  # ~512 token ≈ 400 ký tự tiếng Việt
 
+# Bounding box Hà Nội — chỉ chấp nhận tọa độ trong phạm vi này
+_HN_LAT = (20.56, 21.38)
+_HN_LNG = (105.28, 106.02)
+
 # Cache geocoding — tránh gọi Nominatim nhiều lần cho cùng địa danh
 _geocode_cache: dict[str, tuple[float, float]] = {}
 
@@ -205,6 +209,12 @@ def run_nlp_processor():
 
             if not lat or not lng:
                 print(f"❌ Bỏ qua: Không định vị được GPS cho '{place_name}'.")
+                cursor.execute("UPDATE raw_feed SET is_processed = true WHERE feed_id = %s", (feed_id,))
+                continue
+
+            # Lọc tọa độ ngoài bbox Hà Nội
+            if not (_HN_LAT[0] <= lat <= _HN_LAT[1] and _HN_LNG[0] <= lng <= _HN_LNG[1]):
+                print(f"❌ Bỏ qua: '{place_name}' nằm ngoài Hà Nội (lat={lat:.4f}, lng={lng:.4f}).")
                 cursor.execute("UPDATE raw_feed SET is_processed = true WHERE feed_id = %s", (feed_id,))
                 continue
 
