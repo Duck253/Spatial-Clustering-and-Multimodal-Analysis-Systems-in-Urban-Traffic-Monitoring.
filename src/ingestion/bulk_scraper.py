@@ -92,9 +92,8 @@ def _get_or_create_source(cursor, name: str, url: str) -> int:
 
 
 def _load_recent_hashes(cursor) -> set:
-    from datetime import timedelta
     cursor.execute(
-        "SELECT content_hash FROM raw_feed WHERE fetched_at > NOW() - INTERVAL '%s hours'",
+        "SELECT content_hash FROM raw_feed WHERE fetched_at > NOW() - %s * INTERVAL '1 hour'",
         (DEDUP_WINDOW_HOURS,)
     )
     return {row[0] for row in cursor.fetchall()}
@@ -102,7 +101,7 @@ def _load_recent_hashes(cursor) -> set:
 
 def _load_recent_contents(cursor) -> list:
     cursor.execute(
-        "SELECT raw_content FROM raw_feed WHERE fetched_at > NOW() - INTERVAL '%s hours'",
+        "SELECT raw_content FROM raw_feed WHERE fetched_at > NOW() - %s * INTERVAL '1 hour'",
         (DEDUP_WINDOW_HOURS,)
     )
     return [row[0] for row in cursor.fetchall()]

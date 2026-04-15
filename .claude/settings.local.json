@@ -21,7 +21,11 @@
       "Bash(PYTHONPATH=. python src/scripts/feature_engineer.py)",
       "Bash(PYTHONPATH=. python src/scripts/init_db.py)",
       "Bash(PYTHONPATH=. python src/ingestion/weather_fetcher.py backfill 30)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:vovgiaothong.vn)",
+      "WebFetch(domain:vov.vn)",
+      "WebFetch(domain:api.vovgiaothong.vn)",
+      "Bash(ffmpeg -version)"
     ]
   }
 }
